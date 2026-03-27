@@ -2235,21 +2235,23 @@ class SearchService:
         self,
         stock_code: str,
         stock_name: str,
-        max_searches: int = 3
+        max_searches: int = 3,
+        provider_preference: str = "round_robin",
     ) -> Dict[str, SearchResponse]:
         """
         多维度情报搜索（同时使用多个引擎、多个维度）
-        
+
         搜索维度：
         1. 最新消息 - 近期新闻动态
         2. 风险排查 - 减持、处罚、利空
         3. 业绩预期 - 年报预告、业绩快报
-        
+
         Args:
             stock_code: 股票代码
             stock_name: 股票名称
             max_searches: 最大搜索次数
-            
+            provider_preference: "round_robin"（默认轮询）| "stable_first"（稳定源优先，投机模式用）
+
         Returns:
             {维度名称: SearchResponse} 字典
         """
@@ -2372,42 +2374,80 @@ class SearchService:
             provider_max_results,
         )
         
-        # 轮流使用不同的搜索引擎
+        # 维度级 fallback：每个维度最多尝试 2 个 provider
         provider_index = 0
-        
-        for dim in search_dimensions:
+
+        def _select_providers(dim_index: int):
+            """返回该维度应尝试的 provider 列表（首选 + fallback）。"""
+            available = [p for p in self._providers if p.is_available]
+            if not available:
+                return []
+            if provider_preference == "stable_first":
+                # 稳定源（Brave）优先：把 Brave 排到最前面
+                available.sort(key=lambda p: 0 if "brave" in p.name.lower() else 1)
+                return available[:2]
+            else:
+                # round_robin：首选 = 轮询, fallback = 下一个
+                primary_idx = (provider_index + dim_index) % len(available)
+                candidates = [available[primary_idx]]
+                if len(available) > 1:
+                    fallback_idx = (primary_idx + 1) % len(available)
+                    candidates.append(available[fallback_idx])
+                return candidates
+
+        for dim_idx, dim in enumerate(search_dimensions):
             if search_count >= max_searches:
                 break
-            
-            # 选择搜索引擎（轮流使用）
-            available_providers = [p for p in self._providers if p.is_available]
-            if not available_providers:
-                break
-            
-            provider = available_providers[provider_index % len(available_providers)]
-            provider_index += 1
-            
-            logger.info(f"[情报搜索] {dim['desc']}: 使用 {provider.name}")
 
-            if isinstance(provider, TavilySearchProvider) and dim.get('tavily_topic'):
-                response = provider.search(
-                    dim['query'],
-                    max_results=provider_max_results,
-                    days=search_days,
-                    topic=dim['tavily_topic'],
-                )
+            candidates = _select_providers(dim_idx)
+            if not candidates:
+                break
+
+            response = None
+            used_provider = None
+            for provider in candidates:
+                logger.info(f"[情报搜索] {dim['desc']}: 使用 {provider.name}")
+                try:
+                    if isinstance(provider, TavilySearchProvider) and dim.get('tavily_topic'):
+                        response = provider.search(
+                            dim['query'],
+                            max_results=provider_max_results,
+                            days=search_days,
+                            topic=dim['tavily_topic'],
+                        )
+                    else:
+                        response = provider.search(
+                            dim['query'],
+                            max_results=provider_max_results,
+                            days=search_days,
+                        )
+                    used_provider = provider
+                    if response.success and response.results:
+                        break  # 成功，不需要 fallback
+                    logger.warning(
+                        "[情报搜索] %s: %s 返回空/失败，尝试 fallback",
+                        dim['desc'], provider.name,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "[情报搜索] %s: %s 异常 %s，尝试 fallback",
+                        dim['desc'], provider.name, e,
+                    )
+                    continue
+
+            if response is None:
+                # 所有 provider 都异常
+                response = SearchResponse(success=False, results=[], error_message="all providers failed")
+                used_provider_name = "none"
             else:
-                response = provider.search(
-                    dim['query'],
-                    max_results=provider_max_results,
-                    days=search_days,
-                )
+                used_provider_name = used_provider.name if used_provider else "none"
+
             if dim['strict_freshness']:
                 filtered_response = self._filter_news_response(
                     response,
                     search_days=search_days,
                     max_results=target_per_dimension,
-                    log_scope=f"{stock_code}:{provider.name}:{dim['name']}",
+                    log_scope=f"{stock_code}:{used_provider_name}:{dim['name']}",
                 )
             else:
                 filtered_response = self._normalize_and_limit_response(
@@ -2416,7 +2456,7 @@ class SearchService:
                 )
             results[dim['name']] = filtered_response
             search_count += 1
-            
+
             if response.success:
                 logger.info(
                     "[情报搜索] %s: 原始=%s条, 过滤后=%s条",
@@ -2426,10 +2466,10 @@ class SearchService:
                 )
             else:
                 logger.warning(f"[情报搜索] {dim['desc']}: 搜索失败 - {response.error_message}")
-            
+
             # 短暂延迟避免请求过快
             time.sleep(0.5)
-        
+
         return results
     
     def format_intel_report(self, intel_results: Dict[str, SearchResponse], stock_name: str) -> str:

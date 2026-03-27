@@ -71,6 +71,11 @@ class AnalyzeRequest(BaseModel):
         True,
         description="是否发送推送通知（Telegram/企业微信等）"
     )
+    analysis_type: str = Field(
+        "short_term",
+        description="分析模式：short_term(短期趋势) / speculation(事件投机) / value(价值投资)",
+        pattern="^(short_term|speculation|value)$",
+    )
 
     class Config:
         json_schema_extra = {

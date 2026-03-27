@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { TaskInfo } from '../types/analysis';
+import type { AnalysisType, TaskInfo } from '../types/analysis';
 import { useTaskStream } from './useTaskStream';
 
 type UseDashboardLifecycleOptions = {
@@ -9,6 +9,7 @@ type UseDashboardLifecycleOptions = {
   syncTaskUpdated: (task: TaskInfo) => void;
   syncTaskFailed: (task: TaskInfo) => void;
   removeTask: (taskId: string) => void;
+  analysisType?: AnalysisType;
   enabled?: boolean;
 };
 
@@ -19,8 +20,13 @@ export function useDashboardLifecycle({
   syncTaskUpdated,
   syncTaskFailed,
   removeTask,
+  analysisType,
   enabled = true,
 }: UseDashboardLifecycleOptions): void {
+  const matchesCurrentType = (task: TaskInfo): boolean => {
+    if (!analysisType) return true;
+    return !task.analysisType || task.analysisType === analysisType;
+  };
   const removalTimeoutsRef = useRef<number[]>([]);
 
   useEffect(() => {
@@ -75,16 +81,24 @@ export function useDashboardLifecycle({
   };
 
   useTaskStream({
-    onTaskCreated: syncTaskCreated,
-    onTaskStarted: syncTaskUpdated,
+    onTaskCreated: (task) => {
+      if (matchesCurrentType(task)) syncTaskCreated(task);
+    },
+    onTaskStarted: (task) => {
+      if (matchesCurrentType(task)) syncTaskUpdated(task);
+    },
     onTaskCompleted: (task) => {
-      syncTaskUpdated(task);
-      void refreshHistory(true);
-      scheduleTaskRemoval(task.taskId, 2_000);
+      if (matchesCurrentType(task)) {
+        syncTaskUpdated(task);
+        void refreshHistory(true);
+        scheduleTaskRemoval(task.taskId, 2_000);
+      }
     },
     onTaskFailed: (task) => {
-      syncTaskFailed(task);
-      scheduleTaskRemoval(task.taskId, 5_000);
+      if (matchesCurrentType(task)) {
+        syncTaskFailed(task);
+        scheduleTaskRemoval(task.taskId, 5_000);
+      }
     },
     onError: () => {
       console.warn('SSE connection disconnected, reconnecting...');

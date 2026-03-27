@@ -66,12 +66,13 @@ class TaskInfo:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     report_type: str = "detailed"
+    analysis_type: str = "short_term"
     created_at: datetime = field(default_factory=datetime.now)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     original_query: Optional[str] = None
     selection_source: Optional[str] = None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert task info into an API-friendly dictionary."""
         return {
@@ -82,6 +83,7 @@ class TaskInfo:
             "progress": self.progress,
             "message": self.message,
             "report_type": self.report_type,
+            "analysis_type": self.analysis_type,
             "created_at": self.created_at.isoformat(),
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
@@ -89,7 +91,7 @@ class TaskInfo:
             "original_query": self.original_query,
             "selection_source": self.selection_source,
         }
-    
+
     def copy(self) -> 'TaskInfo':
         """Create a shallow copy of the task information."""
         return TaskInfo(
@@ -102,6 +104,7 @@ class TaskInfo:
             result=self.result,
             error=self.error,
             report_type=self.report_type,
+            analysis_type=self.analysis_type,
             created_at=self.created_at,
             started_at=self.started_at,
             completed_at=self.completed_at,
@@ -300,6 +303,7 @@ class AnalysisTaskQueue:
         selection_source: Optional[str] = None,
         report_type: str = "detailed",
         force_refresh: bool = False,
+        analysis_type: str = "short_term",
     ) -> TaskInfo:
         """
         Submit a single analysis task.
@@ -329,6 +333,7 @@ class AnalysisTaskQueue:
             selection_source=selection_source,
             report_type=report_type,
             force_refresh=force_refresh,
+            analysis_type=analysis_type,
         )
         if duplicates:
             raise duplicates[0]
@@ -343,6 +348,7 @@ class AnalysisTaskQueue:
         report_type: str = "detailed",
         force_refresh: bool = False,
         notify: bool = True,
+        analysis_type: str = "short_term",
     ) -> Tuple[List[TaskInfo], List[DuplicateTaskError]]:
         """
         Submit analysis tasks in batch.
@@ -363,7 +369,7 @@ class AnalysisTaskQueue:
 
         with self._data_lock:
             for stock_code in canonical_codes:
-                dedupe_key = _dedupe_stock_code_key(stock_code)
+                dedupe_key = f"{_dedupe_stock_code_key(stock_code)}:{analysis_type}"
                 if dedupe_key in self._analyzing_stocks:
                     existing_task_id = self._analyzing_stocks[dedupe_key]
                     duplicates.append(DuplicateTaskError(stock_code, existing_task_id))
@@ -377,6 +383,7 @@ class AnalysisTaskQueue:
                     status=TaskStatus.PENDING,
                     message="任务已加入队列",
                     report_type=report_type,
+                    analysis_type=analysis_type,
                     original_query=original_query,
                     selection_source=selection_source,
                 )
@@ -391,6 +398,7 @@ class AnalysisTaskQueue:
                         report_type,
                         force_refresh,
                         notify,
+                        analysis_type,
                     )
                 except Exception:
                     # Roll back the current batch to avoid partial submission.
@@ -496,6 +504,7 @@ class AnalysisTaskQueue:
         report_type: str,
         force_refresh: bool,
         notify: bool = True,
+        analysis_type: str = "short_term",
     ) -> Optional[Dict[str, Any]]:
         """
         执行分析任务（在线程池中运行）
@@ -533,6 +542,7 @@ class AnalysisTaskQueue:
                 force_refresh=force_refresh,
                 query_id=task_id,
                 send_notification=notify,
+                analysis_type=analysis_type,
             )
             
             if result:
@@ -548,7 +558,7 @@ class AnalysisTaskQueue:
                         task.stock_name = result.get("stock_name", task.stock_name)
                         
                         # 从分析中集合移除
-                        dedupe_key = _dedupe_stock_code_key(task.stock_code)
+                        dedupe_key = f"{_dedupe_stock_code_key(task.stock_code)}:{task.analysis_type}"
                         if dedupe_key in self._analyzing_stocks:
                             del self._analyzing_stocks[dedupe_key]
                 

@@ -43,7 +43,8 @@ class AnalysisService:
         report_type: str = "detailed",
         force_refresh: bool = False,
         query_id: Optional[str] = None,
-        send_notification: bool = True
+        send_notification: bool = True,
+        analysis_type: str = "short_term",
     ) -> Optional[Dict[str, Any]]:
         """
         执行股票分析
@@ -65,20 +66,21 @@ class AnalysisService:
             # 导入分析相关模块
             from src.config import get_config
             from src.core.pipeline import StockAnalysisPipeline
-            from src.enums import ReportType
-            
+            from src.enums import AnalysisType, ReportType
+
             # 生成 query_id
             if query_id is None:
                 query_id = uuid.uuid4().hex
-            
+
             # 获取配置
             config = get_config()
-            
+
             # 创建分析流水线
             pipeline = StockAnalysisPipeline(
                 config=config,
                 query_id=query_id,
-                query_source="api"
+                query_source="api",
+                analysis_type=AnalysisType.from_str(analysis_type),
             )
             
             # 确定报告类型 (API: simple/detailed/full/brief -> ReportType)

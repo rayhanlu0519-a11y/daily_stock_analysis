@@ -3,7 +3,7 @@ import { analysisApi, DuplicateTaskError } from '../api/analysis';
 import type { ParsedApiError } from '../api/error';
 import { getParsedApiError } from '../api/error';
 import { historyApi } from '../api/history';
-import type { AnalysisReport, HistoryItem, HistoryListResponse, TaskInfo } from '../types/analysis';
+import type { AnalysisReport, AnalysisType, HistoryItem, HistoryListResponse, TaskInfo } from '../types/analysis';
 import { getRecentStartDate, getTodayInShanghai } from '../utils/format';
 import { isObviouslyInvalidStockQuery, looksLikeStockCode, validateStockCode } from '../utils/validation';
 
@@ -34,6 +34,7 @@ export interface StockPoolState {
   query: string;
   selectionSource: SelectionSource;
   notify: boolean;
+  analysisType: AnalysisType;
   inputError?: string;
   duplicateError: string | null;
   error: ParsedApiError | null;
@@ -63,6 +64,7 @@ export interface StockPoolState {
   deleteSelectedHistory: () => Promise<void>;
   submitAnalysis: (options?: SubmitAnalysisOptions) => Promise<void>;
   setNotify: (notify: boolean) => void;
+  setAnalysisType: (analysisType: AnalysisType) => void;
   syncTaskCreated: (task: TaskInfo) => void;
   syncTaskUpdated: (task: TaskInfo) => void;
   syncTaskFailed: (task: TaskInfo) => void;
@@ -74,6 +76,7 @@ const initialState = {
   query: '',
   selectionSource: 'manual' as SelectionSource,
   notify: true,
+  analysisType: 'short_term' as AnalysisType,
   inputError: undefined,
   duplicateError: null,
   error: null,
@@ -91,12 +94,13 @@ const initialState = {
   markdownDrawerOpen: false,
 };
 
-function buildHistoryParams(page: number) {
+function buildHistoryParams(page: number, analysisType?: AnalysisType) {
   return {
     startDate: getRecentStartDate(30),
     endDate: getTodayInShanghai(),
     page,
     limit: PAGE_SIZE,
+    ...(analysisType && { analysisType }),
   };
 }
 
@@ -119,7 +123,7 @@ async function fetchHistory(
   }
 
   try {
-    const response = await historyApi.getList(buildHistoryParams(page));
+    const response = await historyApi.getList(buildHistoryParams(page, get().analysisType));
     if (requestId !== historyRequestSeq) {
       return null;
     }
@@ -190,6 +194,23 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
   clearInlineMessages: () => set({ inputError: undefined, duplicateError: null }),
 
   setNotify: (notify) => set({ notify }),
+
+  setAnalysisType: (analysisType) => {
+    const current = get().analysisType;
+    if (current === analysisType) return;
+    // Reset history/report state when switching analysis type
+    set({
+      analysisType,
+      historyItems: [],
+      selectedHistoryIds: [],
+      selectedReport: null,
+      hasMore: true,
+      currentPage: 1,
+      activeTasks: [],
+    });
+    // Reload history for the new analysis type
+    void get().loadInitialHistory();
+  },
 
   openMarkdownDrawer: () => set({ markdownDrawerOpen: true }),
 
@@ -345,6 +366,7 @@ export const useStockPoolStore = create<StockPoolState>((set, get) => ({
         originalQuery: originalQuery || stockCodeInput,
         selectionSource,
         notify,
+        analysisType: get().analysisType,
       });
 
       if (requestId !== analyzeRequestSeq) {

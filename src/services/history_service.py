@@ -67,7 +67,8 @@ class HistoryService:
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         page: int = 1,
-        limit: int = 20
+        limit: int = 20,
+        analysis_type: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Get history analysis list.
@@ -108,7 +109,8 @@ class HistoryService:
                 start_date=start_dt,
                 end_date=end_dt,
                 offset=offset,
-                limit=limit
+                limit=limit,
+                analysis_type=analysis_type,
             )
             
             # Convert to response format
@@ -120,6 +122,7 @@ class HistoryService:
                     "stock_code": record.code,
                     "stock_name": record.name,
                     "report_type": record.report_type,
+                    "analysis_type": getattr(record, "analysis_type", "short_term") or "short_term",
                     "sentiment_score": record.sentiment_score,
                     "operation_advice": record.operation_advice,
                     "created_at": record.created_at.isoformat() if record.created_at else None,

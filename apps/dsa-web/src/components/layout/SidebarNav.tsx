@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { BarChart3, BriefcaseBusiness, Home, LogOut, MessageSquareQuote, Settings2 } from 'lucide-react';
+import { BarChart3, BriefcaseBusiness, Flame, Landmark, LayoutDashboard, LogOut, MessageSquareQuote, Settings2, TrendingUp } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAgentChatStore } from '../../stores/agentChatStore';
@@ -22,8 +22,14 @@ type NavItem = {
   badge?: 'completion';
 };
 
-const NAV_ITEMS: NavItem[] = [
-  { key: 'home', label: '首页', to: '/', icon: Home, exact: true },
+type NavEntry = NavItem | { key: string; separator: true };
+
+const NAV_ITEMS: NavEntry[] = [
+  { key: 'home', label: '首页', to: '/', icon: LayoutDashboard, exact: true },
+  { key: 'speculation', label: '投机', to: '/speculation', icon: Flame },
+  { key: 'short-term', label: '短期', to: '/short-term', icon: TrendingUp },
+  { key: 'value', label: '价值', to: '/value', icon: Landmark },
+  { key: 'sep-1', separator: true },
   { key: 'chat', label: '问股', to: '/chat', icon: MessageSquareQuote, badge: 'completion' },
   { key: 'portfolio', label: '持仓', to: '/portfolio', icon: BriefcaseBusiness },
   { key: 'backtest', label: '回测', to: '/backtest', icon: BarChart3 },
@@ -47,51 +53,59 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({ collapsed = false, onNav
       </div>
 
       <nav className="flex flex-1 flex-col gap-1.5" aria-label="主导航">
-        {NAV_ITEMS.map(({ key, label, to, icon: Icon, exact, badge }) => (
-          <NavLink
-            key={key}
-            to={to}
-            end={exact}
-            onClick={onNavigate}
-            aria-label={label}
-            className={({ isActive }) =>
-              cn(
-                'group relative flex items-center gap-3 border-y border-x-0 text-sm transition-all',
-                'h-[var(--nav-item-height)]',
-                collapsed ? 'justify-center px-0' : 'px-[var(--nav-item-padding-x)]',
-                isActive
-                  ? 'border-[var(--nav-active-border)] bg-[var(--nav-active-bg)] text-[hsl(var(--primary))] font-medium'
-                  : 'border-transparent text-secondary-text hover:bg-[var(--nav-hover-bg)] hover:text-foreground'
-              )
-            }
-          >
-            {({ isActive }) => (
-              <>
-                {isActive && (
-                  <motion.div 
-                    layoutId="activeIndicator"
-                    className="absolute top-0 bottom-0 left-0 w-[var(--nav-indicator-width)] bg-[var(--nav-indicator-bg)] shadow-[0_0_10px_var(--nav-indicator-shadow)]"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ duration: 0.2 }}
-                  />
-                )}
-                <Icon className={cn('ml-1 h-5 w-5 shrink-0', isActive ? 'text-[var(--nav-icon-active)]' : 'text-current')} />
-                {!collapsed ? <span className="truncate">{label}</span> : null}
-                {badge === 'completion' && completionBadge ? (
-                  <span
-                    data-testid="chat-completion-badge"
-                    className={cn(
-                      'absolute right-3 h-2.5 w-2.5 rounded-full border-2 border-background bg-[var(--nav-badge-bg)] shadow-[0_0_10px_var(--nav-indicator-shadow)]',
-                      collapsed ? 'right-2 top-2' : ''
-                    )}
-                    aria-label="问股有新消息"
-                  />
-                ) : null}
-              </>
-            )}
-          </NavLink>
-        ))}
+        {NAV_ITEMS.map((entry) => {
+          if ('separator' in entry) {
+            return (
+              <div key={entry.key} className="my-1 border-t border-border/40" />
+            );
+          }
+          const { key, label, to, icon: Icon, exact, badge } = entry;
+          return (
+            <NavLink
+              key={key}
+              to={to}
+              end={exact}
+              onClick={onNavigate}
+              aria-label={label}
+              className={({ isActive }) =>
+                cn(
+                  'group relative flex items-center gap-3 border-y border-x-0 text-sm transition-all',
+                  'h-[var(--nav-item-height)]',
+                  collapsed ? 'justify-center px-0' : 'px-[var(--nav-item-padding-x)]',
+                  isActive
+                    ? 'border-[var(--nav-active-border)] bg-[var(--nav-active-bg)] text-foreground shadow-[inset_0_0_15px_var(--nav-active-shadow)]'
+                    : 'border-transparent text-secondary-text hover:bg-[var(--nav-hover-bg)] hover:text-foreground'
+                )
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  {isActive && (
+                    <motion.div
+                      layoutId="activeIndicator"
+                      className="absolute top-0 bottom-0 left-0 w-[var(--nav-indicator-width)] bg-[var(--nav-indicator-bg)] shadow-[0_0_10px_var(--nav-indicator-shadow)]"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ duration: 0.2 }}
+                    />
+                  )}
+                  <Icon className={cn('ml-1 h-5 w-5 shrink-0', isActive ? 'text-[var(--nav-icon-active)]' : 'text-current')} />
+                  {!collapsed ? <span className="truncate">{label}</span> : null}
+                  {badge === 'completion' && completionBadge ? (
+                    <span
+                      data-testid="chat-completion-badge"
+                      className={cn(
+                        'absolute right-3 h-2.5 w-2.5 rounded-full border-2 border-background bg-[var(--nav-badge-bg)] shadow-[0_0_10px_var(--nav-indicator-shadow)]',
+                        collapsed ? 'right-2 top-2' : ''
+                      )}
+                      aria-label="问股有新消息"
+                    />
+                  ) : null}
+                </>
+              )}
+            </NavLink>
+          );
+        })}
       </nav>
 
       <div className="mt-4 mb-2">

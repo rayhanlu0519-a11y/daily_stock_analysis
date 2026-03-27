@@ -117,6 +117,7 @@ export function useTaskStream(options: UseTaskStreamOptions = {}): UseTaskStream
       error: data.error as string | undefined,
       originalQuery: data.original_query as string | undefined,
       selectionSource: data.selection_source as string | undefined,
+      analysisType: data.analysis_type as TaskInfo['analysisType'],
     };
   };
 

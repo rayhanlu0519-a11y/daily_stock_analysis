@@ -2,6 +2,9 @@ import type React from 'react';
 import { useEffect } from 'react';
 import { BrowserRouter as Router, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import HomePage from './pages/HomePage';
+import SpeculationPage from './pages/SpeculationPage';
+import ShortTermPage from './pages/ShortTermPage';
+import ValuePage from './pages/ValuePage';
 import BacktestPage from './pages/BacktestPage';
 import SettingsPage from './pages/SettingsPage';
 import LoginPage from './pages/LoginPage';
@@ -62,6 +65,9 @@ const AppContent: React.FC = () => {
     <Routes>
       <Route element={<Shell />}>
         <Route path="/" element={<HomePage />} />
+        <Route path="/speculation" element={<SpeculationPage />} />
+        <Route path="/short-term" element={<ShortTermPage />} />
+        <Route path="/value" element={<ValuePage />} />
         <Route path="/chat" element={<ChatPage />} />
         <Route path="/portfolio" element={<PortfolioPage />} />
         <Route path="/backtest" element={<BacktestPage />} />

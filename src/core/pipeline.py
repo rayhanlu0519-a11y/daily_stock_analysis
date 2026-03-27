@@ -40,6 +40,8 @@ from src.enums import ReportType
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
 from src.core.trading_calendar import get_market_for_stock, is_market_open
 from data_provider.us_index_mapping import is_us_stock_code
+from data_provider.akshare_fetcher import is_hk_stock_code
+from src.core.market_capability import get_market_capability
 from bot.models import BotMessage
 
 
@@ -63,7 +65,8 @@ class StockAnalysisPipeline:
         source_message: Optional[BotMessage] = None,
         query_id: Optional[str] = None,
         query_source: Optional[str] = None,
-        save_context_snapshot: Optional[bool] = None
+        save_context_snapshot: Optional[bool] = None,
+        analysis_type=None,
     ):
         """
         初始化调度器
@@ -72,11 +75,13 @@ class StockAnalysisPipeline:
             config: 配置对象（可选，默认使用全局配置）
             max_workers: 最大并发线程数（可选，默认从配置读取）
         """
+        from src.enums import AnalysisType
         self.config = config or get_config()
         self.max_workers = max_workers or self.config.max_workers
         self.source_message = source_message
         self.query_id = query_id
         self.query_source = self._resolve_query_source(query_source)
+        self.analysis_type = analysis_type or AnalysisType.SHORT_TERM
         self.save_context_snapshot = (
             self.config.save_context_snapshot if save_context_snapshot is None else save_context_snapshot
         )
@@ -152,20 +157,31 @@ class StockAnalysisPipeline:
             stock_name = self.fetcher_manager.get_stock_name(code)
 
             today = date.today()
-            # 注意：这里用自然日 date.today() 做“断点续传”判断。
+            # 注意：这里用自然日 date.today() 做"断点续传"判断。
             # 若在周末/节假日/非交易日运行，或机器时区不在中国，可能出现：
             # - 数据库已有最新交易日数据但仍会重复拉取（has_today_data 返回 False）
-            # - 或在跨日/时区偏移时误判“今日已有数据”
-            # 该行为目前保留（按需求不改逻辑），但如需更严谨可改为“最新交易日/数据源最新日期”判断。
-            
-            # 断点续传检查：如果今日数据已存在，跳过
+            # - 或在跨日/时区偏移时误判"今日已有数据"
+            # 该行为目前保留（按需求不改逻辑），但如需更严谨可改为"最新交易日/数据源最新日期"判断。
+
+            # 价值模式需要更长历史数据（180天 vs 默认30天）
+            from src.enums import AnalysisType as _AT
+            _required_days = 180 if self.analysis_type == _AT.VALUE else 30
+
+            # 断点续传检查：如果今日数据已存在，检查历史深度是否满足
             if not force_refresh and self.db.has_today_data(code, today):
-                logger.info(f"{stock_name}({code}) 今日数据已存在，跳过获取（断点续传）")
-                return True, None
+                if _required_days <= 30:
+                    logger.info(f"{stock_name}({code}) 今日数据已存在，跳过获取（断点续传）")
+                    return True, None
+                # 价值模式：检查历史覆盖深度
+                earliest = self.db.get_earliest_date(code)
+                if earliest and (today - earliest).days >= _required_days * 0.8:
+                    logger.info(f"{stock_name}({code}) 历史深度足够({_required_days}天)，跳过获取")
+                    return True, None
+                logger.info(f"{stock_name}({code}) 历史深度不足，需补拉至{_required_days}天")
 
             # 从数据源获取数据
             logger.info(f"{stock_name}({code}) 开始从数据源获取数据...")
-            df, source_name = self.fetcher_manager.get_daily_data(code, days=30)
+            df, source_name = self.fetcher_manager.get_daily_data(code, days=_required_days)
 
             if df is None or df.empty:
                 return False, "获取数据为空"
@@ -229,16 +245,22 @@ class StockAnalysisPipeline:
                 stock_name = f'股票{code}'
 
             # Step 2: 获取筹码分布 - 使用统一入口，带熔断保护
+            # 价值模式跳过筹码数据（对长期价值分析无意义）
             chip_data = None
-            try:
-                chip_data = self.fetcher_manager.get_chip_distribution(code)
-                if chip_data:
-                    logger.info(f"{stock_name}({code}) 筹码分布: 获利比例={chip_data.profit_ratio:.1%}, "
-                              f"90%集中度={chip_data.concentration_90:.2%}")
-                else:
-                    logger.debug(f"{stock_name}({code}) 筹码分布获取失败或已禁用")
-            except Exception as e:
-                logger.warning(f"{stock_name}({code}) 获取筹码分布失败: {e}")
+            from src.enums import AnalysisType as _AT
+            _is_value = self.analysis_type == _AT.VALUE
+            if _is_value:
+                logger.info(f"{stock_name}({code}) 价值模式：跳过筹码分布获取")
+            else:
+                try:
+                    chip_data = self.fetcher_manager.get_chip_distribution(code)
+                    if chip_data:
+                        logger.info(f"{stock_name}({code}) 筹码分布: 获利比例={chip_data.profit_ratio:.1%}, "
+                                  f"90%集中度={chip_data.concentration_90:.2%}")
+                    else:
+                        logger.debug(f"{stock_name}({code}) 筹码分布获取失败或已禁用")
+                except Exception as e:
+                    logger.warning(f"{stock_name}({code}) 获取筹码分布失败: {e}")
 
             # If agent mode is explicitly enabled, or specific agent skills are configured, use the Agent analysis pipeline.
             # NOTE: use config.agent_mode (explicit opt-in) instead of
@@ -258,9 +280,16 @@ class StockAnalysisPipeline:
             # - 关闭开关时仍返回 not_supported 结构
             fundamental_context = None
             try:
+                from src.enums import AnalysisType
+                _is_value = self.analysis_type == AnalysisType.VALUE
                 fundamental_context = self.fetcher_manager.get_fundamental_context(
                     code,
-                    budget_seconds=getattr(self.config, 'fundamental_stage_timeout_seconds', 1.5),
+                    budget_seconds=(
+                        getattr(self.config, 'fundamental_value_stage_timeout_seconds', 12.0)
+                        if _is_value else
+                        getattr(self.config, 'fundamental_stage_timeout_seconds', 1.5)
+                    ),
+                    timeout_profile="value" if _is_value else "default",
                 )
             except Exception as e:
                 logger.warning(f"{stock_name}({code}) 基本面聚合失败: {e}")
@@ -314,15 +343,31 @@ class StockAnalysisPipeline:
                 )
 
             # Step 4: 多维度情报搜索（最新消息+风险排查+业绩预期）
+            from src.enums import AnalysisType as _AT
+            _is_speculation = self.analysis_type == _AT.SPECULATION
+            _is_value_search = self.analysis_type == _AT.VALUE
             news_context = None
+            intel_results = None
             if self.search_service.is_available:
                 logger.info(f"{stock_name}({code}) 开始多维度情报搜索...")
 
-                # 使用多维度搜索（最多5次搜索）
+                # 投机模式：更多搜索 + 稳定源优先（催化剂/新闻是核心输入）
+                # 价值模式：较少搜索（新闻权重低），聚焦年报/行业分析
+                if _is_speculation:
+                    _max_searches = 7
+                    _provider_pref = "stable_first"
+                elif _is_value_search:
+                    _max_searches = 4
+                    _provider_pref = "round_robin"
+                else:
+                    _max_searches = 5
+                    _provider_pref = "round_robin"
+
                 intel_results = self.search_service.search_comprehensive_intel(
                     stock_code=code,
                     stock_name=stock_name,
-                    max_searches=5
+                    max_searches=_max_searches,
+                    provider_preference=_provider_pref,
                 )
 
                 # 格式化情报报告
@@ -365,6 +410,65 @@ class StockAnalysisPipeline:
                 except Exception as e:
                     logger.warning(f"{stock_name}({code}) Social sentiment fetch failed: {e}")
 
+            # Step 4.6: 投机模式新闻数据质量守卫
+            if _is_speculation:
+                _news_dims_ok = 0
+                _key_dims = ("latest_news", "market_analysis", "risk_check")
+                if intel_results:
+                    for _dim in _key_dims:
+                        _resp = intel_results.get(_dim)
+                        if _resp and _resp.success and _resp.results:
+                            _news_dims_ok += 1
+                if _news_dims_ok == 0:
+                    logger.warning(f"{stock_name}({code}) 投机模式：关键新闻维度全部为空，注入数据受限提示")
+                    _news_limited_warning = (
+                        "\n\n⚠️ 新闻数据获取受限：关键情报维度（最新消息、市场分析、风险排查）均未获取到有效数据。"
+                        "请基于已有信息谨慎分析，对不确定的维度明确标注「数据不足」。"
+                    )
+                    if news_context:
+                        news_context = news_context + _news_limited_warning
+                    else:
+                        news_context = _news_limited_warning
+
+            # Step 4.7: 价值模式基本面数据质量守卫
+            if _is_value_search and fundamental_context and isinstance(fundamental_context, dict):
+                _fc_status = fundamental_context.get("status", "")
+                _fc_coverage = fundamental_context.get("coverage", {})
+                _missing_blocks = []
+                if isinstance(_fc_coverage, dict):
+                    for _blk, _st in _fc_coverage.items():
+                        if _st in ("failed", "timeout", "not_supported", "error"):
+                            _missing_blocks.append(_blk)
+
+                if _fc_status == "failed" or (
+                    isinstance(_fc_coverage, dict)
+                    and _fc_coverage.get("valuation") in ("failed", "timeout", "not_supported", "error")
+                ):
+                    # 最小降级：valuation 也失败
+                    _degradation_msg = (
+                        "\n\n⚠️ 基本面数据严重不足：估值（valuation）数据获取失败。"
+                        "本次分析以定性为主，估值结论仅供参考。"
+                        "评分中安全边际权重降为 0%，请侧重护城河和盈利质量维度。"
+                    )
+                    if _missing_blocks:
+                        _degradation_msg += f"\n缺失维度：{', '.join(_missing_blocks)}"
+                    logger.warning(f"{stock_name}({code}) 价值模式：基本面数据严重不足，注入最小降级提示")
+                    if news_context:
+                        news_context = news_context + _degradation_msg
+                    else:
+                        news_context = _degradation_msg
+                elif _missing_blocks:
+                    # 部分降级：valuation 成功但其他 block 缺失
+                    _partial_msg = (
+                        f"\n\n⚠️ 部分基本面数据缺失（{', '.join(_missing_blocks)}），"
+                        "请基于可用数据分析，缺失维度标注「数据不足，需人工验证」。"
+                    )
+                    logger.info(f"{stock_name}({code}) 价值模式：部分基本面缺失 {_missing_blocks}")
+                    if news_context:
+                        news_context = news_context + _partial_msg
+                    else:
+                        news_context = _partial_msg
+
             # Step 5: 获取分析上下文（技术面数据）
             context = self.db.get_analysis_context(code)
 
@@ -389,8 +493,28 @@ class StockAnalysisPipeline:
                 fundamental_context,
             )
             
+            # Step 6.5: 市场能力检查（价值模式 HK/US 受限提示）
+            if is_hk_stock_code(code):
+                _market_key = "hk"
+            elif is_us_stock_code(code):
+                _market_key = "us"
+            else:
+                _market_key = "cn"
+            _capability = get_market_capability(self.analysis_type.value, _market_key)
+            if _capability == "limited":
+                _limited_msg = (
+                    f"\n\n⚠️ 受限分析 — 本次分析为 {_market_key.upper()} 市场，基本面结构化数据有限。"
+                    "请侧重定性分析（行业地位、商业模式、竞争格局），"
+                    "定量指标请从新闻/研报中提取并标注来源。"
+                )
+                logger.info(f"{stock_name}({code}) 市场能力受限({_market_key})，注入提示")
+                if news_context:
+                    news_context = news_context + _limited_msg
+                else:
+                    news_context = _limited_msg
+
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
-            result = self.analyzer.analyze(enhanced_context, news_context=news_context)
+            result = self.analyzer.analyze(enhanced_context, news_context=news_context, analysis_type=self.analysis_type.value)
 
             # Step 7.5: 填充分析时的价格信息到 result
             if result:
@@ -422,7 +546,8 @@ class StockAnalysisPipeline:
                         report_type=report_type.value,
                         news_content=news_context,
                         context_snapshot=context_snapshot,
-                        save_snapshot=self.save_context_snapshot
+                        save_snapshot=self.save_context_snapshot,
+                        analysis_type=self.analysis_type.value,
                     )
                 except Exception as e:
                     logger.warning(f"{stock_name}({code}) 保存分析历史失败: {e}")
@@ -596,7 +721,51 @@ class StockAnalysisPipeline:
             )
         )
 
+        # 价值模式：从基本面数据计算 PEG 并注入上下文
+        from src.enums import AnalysisType as _AT
+        if self.analysis_type == _AT.VALUE and isinstance(fundamental_context, dict):
+            peg = self._compute_peg(fundamental_context, enhanced.get('realtime', {}))
+            if peg is not None:
+                enhanced.setdefault('value_metrics', {})['peg'] = peg
+
         return enhanced
+
+    @staticmethod
+    def _compute_peg(
+        fundamental_context: Dict[str, Any],
+        realtime: Dict[str, Any],
+    ) -> Optional[float]:
+        """计算 PEG = PE_TTM / 盈利增长率。
+
+        数据来源：
+        - PE_TTM: realtime 行情中的 pe_ratio，或基本面 valuation block
+        - 盈利增长率: 基本面 bundle 中的 net_profit_yoy
+        返回 None 表示数据不足无法计算。
+        """
+        # 尝试获取 PE
+        pe = realtime.get('pe_ratio')
+        if pe is None:
+            valuation = fundamental_context.get('valuation', {})
+            if isinstance(valuation, dict):
+                pe = valuation.get('pe_ttm') or valuation.get('pe')
+        # 尝试获取盈利增长率
+        growth_rate = None
+        bundle = fundamental_context.get('bundle', {})
+        if isinstance(bundle, dict):
+            growth_rate = bundle.get('net_profit_yoy')
+        if growth_rate is None:
+            growth = fundamental_context.get('growth', {})
+            if isinstance(growth, dict):
+                growth_rate = growth.get('net_profit_yoy')
+        # 计算
+        try:
+            pe_val = float(pe) if pe is not None else None
+            gr_val = float(growth_rate) if growth_rate is not None else None
+            if pe_val is not None and gr_val is not None and gr_val > 0 and pe_val > 0:
+                return round(pe_val / gr_val, 2)
+        except (TypeError, ValueError):
+            pass
+        return None
 
     def _attach_belong_boards_to_fundamental_context(
         self,
@@ -675,6 +844,7 @@ class StockAnalysisPipeline:
                 "stock_code": code,
                 "stock_name": stock_name,
                 "report_type": report_type.value,
+                "analysis_type": self.analysis_type.value,
                 "report_language": report_language,
                 "fundamental_context": fundamental_context,
             }
@@ -767,7 +937,8 @@ class StockAnalysisPipeline:
                         report_type=report_type.value,
                         news_content=None,
                         context_snapshot=initial_context,
-                        save_snapshot=self.save_context_snapshot
+                        save_snapshot=self.save_context_snapshot,
+                        analysis_type=self.analysis_type.value,
                     )
                 except Exception as e:
                     logger.warning(f"[{code}] 保存 Agent 分析历史失败: {e}")
@@ -1258,7 +1429,7 @@ class StockAnalysisPipeline:
 
                     # Issue #128: 分析间隔 - 在个股分析和大盘分析之间添加延迟
                     if idx < len(stock_codes) - 1 and analysis_delay > 0:
-                        # 注意：此 sleep 发生在“主线程收集 future 的循环”中，
+                        # 注意：此 sleep 发生在"主线程收集 future 的循环"中，
                         # 并不会阻止线程池中的任务同时发起网络请求。
                         # 因此它对降低并发请求峰值的效果有限；真正的峰值主要由 max_workers 决定。
                         # 该行为目前保留（按需求不改逻辑）。

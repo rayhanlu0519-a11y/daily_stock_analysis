@@ -5,6 +5,7 @@ import { analysisApi, DuplicateTaskError } from '../../api/analysis';
 import { historyApi } from '../../api/history';
 import { useStockPoolStore } from '../../stores';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
+import ShortTermPage from '../ShortTermPage';
 import HomePage from '../HomePage';
 
 const navigateMock = vi.fn();
@@ -69,7 +70,52 @@ const historyReport = {
   },
 };
 
-describe('HomePage', () => {
+describe('OverviewPage (HomePage)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    navigateMock.mockReset();
+    useStockPoolStore.getState().resetDashboardState();
+  });
+
+  it('renders the overview page with analysis entry cards', async () => {
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 0,
+      page: 1,
+      limit: 20,
+      items: [],
+    });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('概览')).toBeInTheDocument();
+    expect(screen.getByText('投机分析')).toBeInTheDocument();
+    expect(screen.getByText('短期分析')).toBeInTheDocument();
+    expect(screen.getByText('价值分析')).toBeInTheDocument();
+  });
+
+  it('shows recent history items on overview', async () => {
+    vi.mocked(historyApi.getList).mockResolvedValue({
+      total: 1,
+      page: 1,
+      limit: 10,
+      items: [historyItem],
+    });
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('贵州茅台')).toBeInTheDocument();
+  });
+});
+
+describe('ShortTermPage (Analysis Dashboard)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     navigateMock.mockReset();
@@ -91,11 +137,11 @@ describe('HomePage', () => {
 
     render(
       <MemoryRouter>
-        <HomePage />
+        <ShortTermPage />
       </MemoryRouter>,
     );
 
-    const dashboard = await screen.findByTestId('home-dashboard');
+    const dashboard = await screen.findByTestId('analysis-dashboard');
     expect(dashboard).toBeInTheDocument();
     expect(dashboard.className).toContain('h-[calc(100vh-5rem)]');
     expect(dashboard.className).toContain('lg:h-[calc(100vh-2rem)]');
@@ -120,7 +166,7 @@ describe('HomePage', () => {
 
     render(
       <MemoryRouter>
-        <HomePage />
+        <ShortTermPage />
       </MemoryRouter>,
     );
 
@@ -143,7 +189,7 @@ describe('HomePage', () => {
 
     render(
       <MemoryRouter>
-        <HomePage />
+        <ShortTermPage />
       </MemoryRouter>,
     );
 
@@ -167,7 +213,7 @@ describe('HomePage', () => {
 
     render(
       <MemoryRouter>
-        <HomePage />
+        <ShortTermPage />
       </MemoryRouter>,
     );
 
@@ -197,7 +243,7 @@ describe('HomePage', () => {
 
     render(
       <MemoryRouter>
-        <HomePage />
+        <ShortTermPage />
       </MemoryRouter>,
     );
 
@@ -224,7 +270,7 @@ describe('HomePage', () => {
 
     const { container } = render(
       <MemoryRouter>
-        <HomePage />
+        <ShortTermPage />
       </MemoryRouter>,
     );
 
@@ -266,7 +312,7 @@ describe('HomePage', () => {
 
     render(
       <MemoryRouter>
-        <HomePage />
+        <ShortTermPage />
       </MemoryRouter>,
     );
 

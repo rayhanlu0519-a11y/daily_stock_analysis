@@ -10,6 +10,25 @@
 from enum import Enum
 
 
+class AnalysisType(str, Enum):
+    """
+    分析模式枚举
+
+    区分不同投资风格的分析路径。
+    """
+    SHORT_TERM = "short_term"    # 短期趋势交易（1-3天，1-2周）
+    SPECULATION = "speculation"  # 事件驱动投机（2周-1月）
+    VALUE = "value"              # 巴菲特风格价值投资（3-10年）
+
+    @classmethod
+    def from_str(cls, value: str) -> "AnalysisType":
+        """从字符串安全地转换为枚举值，无效输入返回默认值 SHORT_TERM。"""
+        try:
+            return cls(value.lower().strip())
+        except (ValueError, AttributeError):
+            return cls.SHORT_TERM
+
+
 class ReportType(str, Enum):
     """
     报告类型枚举

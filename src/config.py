@@ -680,9 +680,9 @@ class Config:
     # === 基本面聚合开关与降级保护 ===
     # 全局总开关；关闭时返回 not_supported 并保持主流程无变化
     enable_fundamental_pipeline: bool = True
-    # 基本面阶段总预算（秒）
+    # 基本面阶段总预算（秒）— 短期/投机模式使用
     fundamental_stage_timeout_seconds: float = 1.5
-    # 单能力源调用超时（秒）
+    # 单能力源调用超时（秒）— 短期/投机模式使用
     fundamental_fetch_timeout_seconds: float = 0.8
     # 单能力失败重试次数（已包含首次）
     fundamental_retry_max: int = 1
@@ -690,6 +690,18 @@ class Config:
     fundamental_cache_ttl_seconds: int = 120
     # 基本面缓存最大条目数（避免长时间运行内存增长）
     fundamental_cache_max_entries: int = 256
+
+    # === 价值模式基本面超时分层 ===
+    # 命名规则：Python config 键 = 小写蛇形 + _seconds 后缀
+    fundamental_valuation_timeout_seconds: float = 3.0
+    fundamental_bundle_timeout_seconds: float = 5.0
+    fundamental_capital_flow_timeout_seconds: float = 2.0
+    fundamental_dragon_tiger_timeout_seconds: float = 0.8
+    fundamental_boards_timeout_seconds: float = 0.8
+    # 价值模式阶段总预算（秒）
+    fundamental_value_stage_timeout_seconds: float = 12.0
+    # 价值模式缓存 TTL（秒）— 财报季度级数据变化慢
+    fundamental_cache_ttl_value_seconds: int = 600
 
     # === Portfolio PR2: import/risk/fx settings ===
     portfolio_risk_concentration_alert_pct: float = 35.0
@@ -1320,6 +1332,48 @@ class Config:
                 256,
                 field_name='FUNDAMENTAL_CACHE_MAX_ENTRIES',
                 minimum=1,
+            ),
+            fundamental_valuation_timeout_seconds=parse_env_float(
+                os.getenv('FUNDAMENTAL_VALUATION_TIMEOUT_SECONDS'),
+                3.0,
+                field_name='FUNDAMENTAL_VALUATION_TIMEOUT_SECONDS',
+                minimum=0.0,
+            ),
+            fundamental_bundle_timeout_seconds=parse_env_float(
+                os.getenv('FUNDAMENTAL_BUNDLE_TIMEOUT_SECONDS'),
+                5.0,
+                field_name='FUNDAMENTAL_BUNDLE_TIMEOUT_SECONDS',
+                minimum=0.0,
+            ),
+            fundamental_capital_flow_timeout_seconds=parse_env_float(
+                os.getenv('FUNDAMENTAL_CAPITAL_FLOW_TIMEOUT_SECONDS'),
+                2.0,
+                field_name='FUNDAMENTAL_CAPITAL_FLOW_TIMEOUT_SECONDS',
+                minimum=0.0,
+            ),
+            fundamental_dragon_tiger_timeout_seconds=parse_env_float(
+                os.getenv('FUNDAMENTAL_DRAGON_TIGER_TIMEOUT_SECONDS'),
+                0.8,
+                field_name='FUNDAMENTAL_DRAGON_TIGER_TIMEOUT_SECONDS',
+                minimum=0.0,
+            ),
+            fundamental_boards_timeout_seconds=parse_env_float(
+                os.getenv('FUNDAMENTAL_BOARDS_TIMEOUT_SECONDS'),
+                0.8,
+                field_name='FUNDAMENTAL_BOARDS_TIMEOUT_SECONDS',
+                minimum=0.0,
+            ),
+            fundamental_value_stage_timeout_seconds=parse_env_float(
+                os.getenv('FUNDAMENTAL_VALUE_STAGE_TIMEOUT_SECONDS'),
+                12.0,
+                field_name='FUNDAMENTAL_VALUE_STAGE_TIMEOUT_SECONDS',
+                minimum=0.0,
+            ),
+            fundamental_cache_ttl_value_seconds=parse_env_int(
+                os.getenv('FUNDAMENTAL_CACHE_TTL_VALUE_SECONDS'),
+                600,
+                field_name='FUNDAMENTAL_CACHE_TTL_VALUE_SECONDS',
+                minimum=0,
             ),
             portfolio_risk_concentration_alert_pct=parse_env_float(
                 os.getenv('PORTFOLIO_RISK_CONCENTRATION_ALERT_PCT'),

@@ -40,6 +40,7 @@ from sqlalchemy import (
     delete,
     desc,
     func,
+    text,
 )
 from sqlalchemy.orm import (
     declarative_base,
@@ -222,6 +223,7 @@ class AnalysisHistory(Base):
     code = Column(String(10), nullable=False, index=True)
     name = Column(String(50))
     report_type = Column(String(16), index=True)
+    analysis_type = Column(String(20), default="short_term")
 
     # 核心结论
     sentiment_score = Column(Integer)
@@ -254,6 +256,7 @@ class AnalysisHistory(Base):
             'code': self.code,
             'name': self.name,
             'report_type': self.report_type,
+            'analysis_type': self.analysis_type,
             'sentiment_score': self.sentiment_score,
             'operation_advice': self.operation_advice,
             'trend_prediction': self.trend_prediction,
@@ -620,6 +623,38 @@ class LLMUsage(Base):
     called_at = Column(DateTime, default=datetime.now, index=True)
 
 
+def _run_migrations(engine):
+    """在 create_all 之后运行增量迁移，兼容新旧数据库。
+
+    两条路径：
+    - 旧库：列不存在 → ADD COLUMN + CREATE INDEX
+    - 新库：列已由 create_all() 创建 → 仅补建 INDEX（ORM 没有 index=True）
+    """
+    with engine.connect() as conn:
+        # Step 1: 补列（旧库路径）
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info('analysis_history')"))}
+        if 'analysis_type' not in cols:
+            conn.execute(text(
+                "ALTER TABLE analysis_history ADD COLUMN analysis_type TEXT DEFAULT 'short_term'"
+            ))
+            logger.info("Migration: added analysis_type column to analysis_history")
+
+        # Step 2: 补索引（新库 + 旧库均需要，独立于列检查）
+        existing_indexes = {
+            row[1] for row in conn.execute(
+                text("SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='analysis_history'")
+            )
+        }
+        if 'ix_analysis_history_analysis_type' not in existing_indexes:
+            conn.execute(text(
+                "CREATE INDEX ix_analysis_history_analysis_type "
+                "ON analysis_history(analysis_type)"
+            ))
+            logger.info("Migration: created index ix_analysis_history_analysis_type")
+
+        conn.commit()
+
+
 class DatabaseManager:
     """
     数据库管理器 - 单例模式
@@ -670,6 +705,9 @@ class DatabaseManager:
         
         # 创建所有表
         Base.metadata.create_all(self._engine)
+
+        # 运行增量迁移（补列 + 补索引）
+        _run_migrations(self._engine)
 
         self._initialized = True
         logger.info(f"数据库初始化完成: {db_url}")
@@ -774,7 +812,15 @@ class DatabaseManager:
             ).scalar_one_or_none()
             
             return result is not None
-    
+
+    def get_earliest_date(self, code: str) -> Optional[date]:
+        """获取某只股票在数据库中的最早日期，用于历史深度判断。"""
+        with self.get_session() as session:
+            result = session.execute(
+                select(func.min(StockDaily.date)).where(StockDaily.code == code)
+            ).scalar()
+            return result
+
     def get_latest_data(
         self, 
         code: str, 
@@ -1062,7 +1108,8 @@ class DatabaseManager:
         report_type: str,
         news_content: Optional[str],
         context_snapshot: Optional[Dict[str, Any]] = None,
-        save_snapshot: bool = True
+        save_snapshot: bool = True,
+        analysis_type: str = "short_term",
     ) -> int:
         """
         保存分析结果历史记录
@@ -1081,6 +1128,7 @@ class DatabaseManager:
             code=result.code,
             name=result.name,
             report_type=report_type,
+            analysis_type=analysis_type,
             sentiment_score=result.sentiment_score,
             operation_advice=result.operation_advice,
             trend_prediction=result.trend_prediction,
@@ -1153,7 +1201,8 @@ class DatabaseManager:
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         offset: int = 0,
-        limit: int = 20
+        limit: int = 20,
+        analysis_type: Optional[str] = None,
     ) -> Tuple[List[AnalysisHistory], int]:
         """
         分页查询分析历史记录（带总数）
@@ -1175,6 +1224,8 @@ class DatabaseManager:
             
             if code:
                 conditions.append(AnalysisHistory.code == code)
+            if analysis_type:
+                conditions.append(AnalysisHistory.analysis_type == analysis_type)
             if start_date:
                 # created_at >= start_date 00:00:00
                 conditions.append(AnalysisHistory.created_at >= datetime.combine(start_date, datetime.min.time()))

@@ -262,6 +262,7 @@ def _handle_async_analysis_batch(
         report_type=request.report_type,
         force_refresh=request.force_refresh,
         notify=notify,
+        analysis_type=getattr(request, "analysis_type", "short_term"),
     )
 
     accepted = [
@@ -342,6 +343,7 @@ def _handle_sync_analysis(
             force_refresh=request.force_refresh,
             query_id=query_id,
             send_notification=getattr(request, "notify", True),
+            analysis_type=getattr(request, "analysis_type", "short_term"),
         )
 
         if result is None:

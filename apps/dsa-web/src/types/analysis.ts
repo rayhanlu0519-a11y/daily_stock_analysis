@@ -3,6 +3,10 @@
  * Aligned with the API schema.
  */
 
+// ============ Analysis Type ============
+
+export type AnalysisType = 'short_term' | 'speculation' | 'value';
+
 // ============ Request Types ============
 
 export interface AnalysisRequest {
@@ -15,6 +19,7 @@ export interface AnalysisRequest {
   originalQuery?: string;
   selectionSource?: 'manual' | 'autocomplete' | 'import' | 'image';
   notify?: boolean;
+  analysisType?: AnalysisType;
 }
 
 // ============ Report Types ============
@@ -168,6 +173,7 @@ export interface TaskInfo {
   error?: string;
   originalQuery?: string;
   selectionSource?: string;
+  analysisType?: AnalysisType;
 }
 
 /** Task list response */
@@ -198,6 +204,7 @@ export interface HistoryItem {
   sentimentScore?: number;
   operationAdvice?: string;
   createdAt: string;
+  analysisType?: AnalysisType;
 }
 
 /** History list response */

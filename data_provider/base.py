@@ -1758,10 +1758,14 @@ class DataFetcherManager:
     def get_fundamental_context(
         self,
         stock_code: str,
-        budget_seconds: Optional[float] = None
+        budget_seconds: Optional[float] = None,
+        timeout_profile: str = "default",
     ) -> Dict[str, Any]:
         """
         Aggregate fundamental blocks with fail-open semantics.
+
+        Args:
+            timeout_profile: "default" (短期/投机) or "value" (价值模式 — 更高超时、跳过不相关 block)
         """
         from src.config import get_config
 
@@ -1781,14 +1785,27 @@ class DataFetcherManager:
                 reason="market not supported",
             )
 
-        stage_timeout = float(
-            budget_seconds if budget_seconds is not None else config.fundamental_stage_timeout_seconds
-        )
+        is_value_profile = timeout_profile == "value"
+
+        if is_value_profile:
+            stage_timeout = float(
+                budget_seconds if budget_seconds is not None
+                else config.fundamental_value_stage_timeout_seconds
+            )
+            fetch_timeout = float(config.fundamental_bundle_timeout_seconds)
+        else:
+            stage_timeout = float(
+                budget_seconds if budget_seconds is not None
+                else config.fundamental_stage_timeout_seconds
+            )
+            fetch_timeout = float(config.fundamental_fetch_timeout_seconds)
         stage_timeout = max(0.0, stage_timeout)
-        fetch_timeout = float(config.fundamental_fetch_timeout_seconds)
         fetch_timeout = max(0.0, fetch_timeout)
 
-        cache_ttl = int(config.fundamental_cache_ttl_seconds)
+        cache_ttl = int(
+            config.fundamental_cache_ttl_value_seconds if is_value_profile
+            else config.fundamental_cache_ttl_seconds
+        )
         cache_max_entries = max(0, int(getattr(config, "fundamental_cache_max_entries", 256)))
         cache_key = self._get_fundamental_cache_key(stock_code, stage_timeout)
         if cache_ttl > 0:
@@ -1821,7 +1838,10 @@ class DataFetcherManager:
             nonlocal remaining_seconds
             remaining_seconds = max(0.0, remaining_seconds - consumed_ms / 1000.0)
 
-        valuation_timeout = min(fetch_timeout, remaining_seconds)
+        valuation_timeout = min(
+            float(config.fundamental_valuation_timeout_seconds) if is_value_profile else fetch_timeout,
+            remaining_seconds,
+        )
         if valuation_timeout > 0:
             quote_payload, valuation_err, valuation_ms = self._run_with_retry(
                 lambda: self.get_realtime_quote(stock_code),
@@ -1863,7 +1883,10 @@ class DataFetcherManager:
             bundle_errors = ["fundamental stage timeout"]
             bundle_ms = 0
         else:
-            bundle_timeout = min(fetch_timeout, remaining_seconds)
+            bundle_timeout = min(
+                float(config.fundamental_bundle_timeout_seconds) if is_value_profile else fetch_timeout,
+                remaining_seconds,
+            )
             bundle_payload, bundle_err_msg, bundle_ms = self._run_with_retry(
                 lambda: self._fundamental_adapter.get_fundamental_bundle(stock_code),
                 bundle_timeout,
@@ -1993,7 +2016,10 @@ class DataFetcherManager:
             )
             result_ctx["status"] = "partial"
         else:
-            capital_flow_budget = min(fetch_timeout, remaining_seconds)
+            capital_flow_budget = min(
+                float(config.fundamental_capital_flow_timeout_seconds) if is_value_profile else fetch_timeout,
+                remaining_seconds,
+            )
             capital_flow_start = time.time()
             result_ctx["capital_flow"] = self.get_capital_flow_context(
                 stock_code,
@@ -2001,18 +2027,31 @@ class DataFetcherManager:
             )
             _consume_budget(int((time.time() - capital_flow_start) * 1000))
 
-            dragon_tiger_budget = min(fetch_timeout, remaining_seconds)
-            dragon_tiger_start = time.time()
-            result_ctx["dragon_tiger"] = self.get_dragon_tiger_context(
-                stock_code,
-                budget_seconds=dragon_tiger_budget,
-            )
-            _consume_budget(int((time.time() - dragon_tiger_start) * 1000))
+            if is_value_profile:
+                # 价值模式跳过 dragon_tiger 和 boards（对长期价值无意义）
+                result_ctx["dragon_tiger"] = self._build_fundamental_block(
+                    "not_supported", {},
+                    [{"provider": "fundamental_pipeline", "result": "not_supported", "duration_ms": 0}],
+                    ["skipped for value profile"],
+                )
+                result_ctx["boards"] = self._build_fundamental_block(
+                    "not_supported", {},
+                    [{"provider": "fundamental_pipeline", "result": "not_supported", "duration_ms": 0}],
+                    ["skipped for value profile"],
+                )
+            else:
+                dragon_tiger_budget = min(fetch_timeout, remaining_seconds)
+                dragon_tiger_start = time.time()
+                result_ctx["dragon_tiger"] = self.get_dragon_tiger_context(
+                    stock_code,
+                    budget_seconds=dragon_tiger_budget,
+                )
+                _consume_budget(int((time.time() - dragon_tiger_start) * 1000))
 
-            result_ctx["boards"] = self.get_board_context(
-                stock_code,
-                budget_seconds=min(fetch_timeout, remaining_seconds),
-            )
+                result_ctx["boards"] = self.get_board_context(
+                    stock_code,
+                    budget_seconds=min(fetch_timeout, remaining_seconds),
+                )
 
         block_statuses = {
             "valuation": result_ctx["valuation"].get("status", "not_supported"),
